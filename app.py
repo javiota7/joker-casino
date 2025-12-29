@@ -5,11 +5,12 @@ import os
 import math
 from collections import Counter
 from datetime import datetime
+import io # Necesario para la descarga
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Sistema Joker", page_icon="🃏", layout="centered")
 
-# --- RUTA DEL ARCHIVO ---
+# --- RUTA DEL ARCHIVO TEMPORAL ---
 NOMBRE_ARCHIVO = "registro_ruleta_app.xlsx"
 
 CILINDRO = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23,
@@ -42,6 +43,7 @@ def cargar_y_reparar_excel(ruta_o_archivo):
         if df.empty: return pd.DataFrame(columns=["ID", "Fecha_Hora", "Numero_Actual", "Numero_Anterior", "Distancia_Calculada"])
         
         if "Distancia_Calculada" not in df.columns:
+            # Intentar reparar calculando distancias
             col_num = next((c for c in df.columns if "numero" in str(c).lower() or "actual" in str(c).lower()), None)
             if col_num:
                 distancias = [0] + [calcular_distancia(df[col_num].iloc[i-1], df[col_num].iloc[i]) for i in range(1, len(df))]
@@ -88,7 +90,7 @@ def obtener_top_movimientos_dinamico(distancias_historicas, peso_reciente):
     if m2: tops.append(m2)
     return tops
 
-# --- ESTADO ---
+# --- ESTADO DE SESIÓN ---
 if 'bank' not in st.session_state: st.session_state.bank = 0.0
 if 'bank_inicial' not in st.session_state: st.session_state.bank_inicial = 0.0
 if 'u_num' not in st.session_state: st.session_state.u_num = None
@@ -106,19 +108,46 @@ with st.sidebar:
     input_bank = st.number_input("Capital (€)", value=200.0, step=10.0)
     
     st.write("---")
-    st.write("📂 **Datos**")
-    uploaded_file = st.file_uploader("Subir Excel (.xlsx)", type=["xlsx"])
+    st.write("📂 **Cargar Historial (Inicio)**")
+    uploaded_file = st.file_uploader("Sube tu Excel aquí", type=["xlsx"])
     if uploaded_file:
         try:
             df_subido = cargar_y_reparar_excel(uploaded_file)
             st.session_state.df_historico = df_subido
             df_subido.to_excel(NOMBRE_ARCHIVO, index=False)
-            st.success(f"Cargados {len(df_subido)} datos.")
+            st.success(f"✅ Cargados {len(df_subido)} datos.")
         except: pass
 
     st.write("---")
-    # BOTÓN DE BORRADO REAL
-    if st.button("🗑️ BORRAR BASE DE DATOS", type="primary"):
+    st.write("💾 **Guardar Progreso (Final)**")
+    
+    # LÓGICA DEL BOTÓN DE DESCARGA
+    # Preparamos el archivo para descargar
+    df_descarga = pd.DataFrame()
+    if 'df_historico' in st.session_state:
+        df_descarga = st.session_state.df_historico
+    elif os.path.exists(NOMBRE_ARCHIVO):
+        df_descarga = cargar_y_reparar_excel(NOMBRE_ARCHIVO)
+    
+    if not df_descarga.empty:
+        # Convertir a bytes para descargar
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df_descarga.to_excel(writer, index=False)
+        
+        st.download_button(
+            label="📥 DESCARGAR DATOS ACTUALIZADOS",
+            data=buffer.getvalue(),
+            file_name="historial_joker_actualizado.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
+    else:
+        st.info("Juega para generar datos descargables.")
+
+    st.write("---")
+    # BOTÓN DE BORRADO
+    if st.button("🗑️ BORRAR BASE DE DATOS"):
         if os.path.exists(NOMBRE_ARCHIVO):
             os.remove(NOMBRE_ARCHIVO)
         st.session_state.clear()
