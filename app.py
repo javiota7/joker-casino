@@ -5,12 +5,12 @@ import os
 import math
 from collections import Counter
 from datetime import datetime
-import io # Necesario para la descarga
+import io
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Sistema Joker", page_icon="🃏", layout="centered")
 
-# --- RUTA DEL ARCHIVO TEMPORAL ---
+# --- RUTA DEL ARCHIVO ---
 NOMBRE_ARCHIVO = "registro_ruleta_app.xlsx"
 
 CILINDRO = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23,
@@ -43,7 +43,6 @@ def cargar_y_reparar_excel(ruta_o_archivo):
         if df.empty: return pd.DataFrame(columns=["ID", "Fecha_Hora", "Numero_Actual", "Numero_Anterior", "Distancia_Calculada"])
         
         if "Distancia_Calculada" not in df.columns:
-            # Intentar reparar calculando distancias
             col_num = next((c for c in df.columns if "numero" in str(c).lower() or "actual" in str(c).lower()), None)
             if col_num:
                 distancias = [0] + [calcular_distancia(df[col_num].iloc[i-1], df[col_num].iloc[i]) for i in range(1, len(df))]
@@ -90,7 +89,7 @@ def obtener_top_movimientos_dinamico(distancias_historicas, peso_reciente):
     if m2: tops.append(m2)
     return tops
 
-# --- ESTADO DE SESIÓN ---
+# --- ESTADO ---
 if 'bank' not in st.session_state: st.session_state.bank = 0.0
 if 'bank_inicial' not in st.session_state: st.session_state.bank_inicial = 0.0
 if 'u_num' not in st.session_state: st.session_state.u_num = None
@@ -99,6 +98,7 @@ if 'calibrado' not in st.session_state: st.session_state.calibrado = False
 if 'historial_sesion' not in st.session_state: st.session_state.historial_sesion = []
 if 'memoria_dists' not in st.session_state: st.session_state.memoria_dists = []
 if 'apuesta_actual' not in st.session_state: st.session_state.apuesta_actual = []
+if 'modo_rescate_activo' not in st.session_state: st.session_state.modo_rescate_activo = False
 
 # --- APP ---
 st.title("🃏 SISTEMA JOKER")
@@ -121,8 +121,6 @@ with st.sidebar:
     st.write("---")
     st.write("💾 **Guardar Progreso (Final)**")
     
-    # LÓGICA DEL BOTÓN DE DESCARGA
-    # Preparamos el archivo para descargar
     df_descarga = pd.DataFrame()
     if 'df_historico' in st.session_state:
         df_descarga = st.session_state.df_historico
@@ -130,23 +128,21 @@ with st.sidebar:
         df_descarga = cargar_y_reparar_excel(NOMBRE_ARCHIVO)
     
     if not df_descarga.empty:
-        # Convertir a bytes para descargar
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_descarga.to_excel(writer, index=False)
         
         st.download_button(
-            label="📥 DESCARGAR DATOS ACTUALIZADOS",
+            label="📥 DESCARGAR DATOS",
             data=buffer.getvalue(),
             file_name="historial_joker_actualizado.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
     else:
-        st.info("Juega para generar datos descargables.")
+        st.info("Juega para generar datos.")
 
     st.write("---")
-    # BOTÓN DE BORRADO
     if st.button("🗑️ BORRAR BASE DE DATOS"):
         if os.path.exists(NOMBRE_ARCHIVO):
             os.remove(NOMBRE_ARCHIVO)
@@ -173,7 +169,7 @@ elif not st.session_state.calibrado:
             st.rerun()
 
 else:
-    # LÓGICA DE JUEGO
+    # LÓGICA DE JUEGO Y DATOS
     if 'df_historico' in st.session_state: dists_excel = st.session_state.df_historico["Distancia_Calculada"].dropna().astype(int).tolist()
     elif os.path.exists(NOMBRE_ARCHIVO): 
         df = cargar_y_reparar_excel(NOMBRE_ARCHIVO)
@@ -183,21 +179,43 @@ else:
     todas_dists = dists_excel + st.session_state.memoria_dists
     ficha = math.floor((st.session_state.bank_inicial / 10 / 12) * 100) / 100
     
-    # Métricas
+    # --- CÁLCULO DE ESTADO Y MODOS ---
+    spins_sesion = len(st.session_state.historial_sesion)
+    perdida_actual = st.session_state.bank_inicial - st.session_state.bank
+    porcentaje_perdida = (perdida_actual / st.session_state.bank_inicial) * 100
+    
+    # Parámetros del Usuario
+    MIN_SPINS_PARA_ACTIVAR = 20
+    LIMITE_RIESGO = 40.0 # 40% de pérdida activa el modo
+
+    # Lógica de Cerrojo (Hysteresis)
+    if st.session_state.modo_rescate_activo:
+        # Si ya estamos en rescate, solo salimos si recuperamos TODO el inicial
+        if st.session_state.bank >= st.session_state.bank_inicial:
+            st.session_state.modo_rescate_activo = False
+            peso = 1
+        else:
+            peso = 5 # Mantenemos presión
+    else:
+        # Si estamos en modo normal, verificamos triggers
+        if spins_sesion >= MIN_SPINS_PARA_ACTIVAR and porcentaje_perdida >= LIMITE_RIESGO:
+            st.session_state.modo_rescate_activo = True
+            peso = 5
+        else:
+            peso = 1
+
+    # Métricas Visuales
     c1, c2 = st.columns(2)
     c1.metric("Saldo", f"{st.session_state.bank:.2f}€", delta=f"{st.session_state.bank - st.session_state.bank_inicial:.2f}€")
     c2.metric("Ficha", f"{ficha:.2f}€")
     
-    # Modos
-    if len(todas_dists) < 15:
-        peso = 1
-        st.caption(f"❄️ Calentando ({len(todas_dists)} datos)")
-    elif st.session_state.bank < st.session_state.bank_inicial:
-        peso = 5
-        st.error("🔥 MODO RESCATE (x5)")
+    # Aviso de Modo
+    if st.session_state.modo_rescate_activo:
+        st.error(f"🔥 MODO RESCATE (x5) | Pérdida: {porcentaje_perdida:.1f}%")
+    elif spins_sesion < MIN_SPINS_PARA_ACTIVAR:
+        st.info(f"⏳ ESTABILIZANDO SISTEMA ({spins_sesion}/20 tiradas)")
     else:
-        peso = 1
-        st.success("🛳️ MODO CRUCERO")
+        st.success(f"🛳️ MODO CRUCERO (x1) | Sistema Estable")
 
     # Input
     st.write("---")
@@ -246,7 +264,11 @@ else:
         st.code(str(sorted(final)[:12]))
         
         if tops:
-            st.caption(f"Tendencia: Salto de {tops[0][0]} huecos")
+            st.write("---")
+            st.markdown("**📊 TENDENCIAS:**")
+            for i, (mov, freq) in enumerate(tops):
+                tag = "🔥" if i == 0 and peso > 1 else ""
+                st.write(f"➤ Tendencia {i+1}: Salto de **{mov}** {tag}")
             
     if st.session_state.historial_sesion:
         with st.expander("Historial"): st.write(st.session_state.historial_sesion[::-1])
