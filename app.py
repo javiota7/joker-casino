@@ -35,24 +35,47 @@ def inicializar_dataframe():
     """Crea una estructura de DataFrame vacía pero con tipos correctos."""
     return pd.DataFrame(columns=["ID", "Fecha_Hora", "Numero_Actual", "Numero_Anterior", "Distancia_Calculada"])
 
+# EXCEL CARGA
 def cargar_y_reparar_excel(ruta_o_archivo):
     try:
-        df = pd.read_excel(ruta_o_archivo)
-        if df.empty: return inicializar_dataframe()
+        # Forzamos motor openpyxl para leer archivos modernos
+        df = pd.read_excel(ruta_o_archivo, engine='openpyxl')
         
-        # Reparación de columnas si faltan
-        if "Distancia_Calculada" not in df.columns:
-            # Intentar deducir columnas
-            col_num = next((c for c in df.columns if "numero" in str(c).lower() or "actual" in str(c).lower()), None)
-            if col_num:
-                # Recalcular distancias desde cero
-                numeros = df[col_num].tolist()
-                distancias = [0]
-                for i in range(1, len(numeros)):
-                    distancias.append(calcular_distancia(numeros[i-1], numeros[i]))
-                
-                df["Distancia_Calculada"] = distancias
-                df["Numero_Actual"] = df[col_num]
+        # Si está vacío o no tiene datos, devolvemos estructura vacía
+        if df.empty: 
+            return pd.DataFrame(columns=["ID", "Fecha_Hora", "Numero_Actual", "Numero_Anterior", "Distancia_Calculada"])
+        
+        # Limpieza de nombres de columnas (quita espacios extra)
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        # Buscamos la columna de los números (acepta 'Numero_Actual', 'Numero', 'Rotación', etc.)
+        col_num = next((c for c in df.columns if "actual" in c.lower() or "numero" in c.lower()), None)
+        
+        if not col_num:
+            return pd.DataFrame() # Falló la búsqueda de columna
+
+        # RECONSTRUCCIÓN INTELIGENTE (JOKER):
+        # Ignoramos la columna 'Numero_Anterior' del Excel porque venía con ceros.
+        # Creamos la secuencia real usando solo los números que salieron.
+        numeros = df[col_num].astype(int).tolist()
+        
+        nuevo_df = pd.DataFrame()
+        nuevo_df["ID"] = range(1, len(numeros) + 1)
+        nuevo_df["Fecha_Hora"] = df["Fecha_Hora"] if "Fecha_Hora" in df.columns else "HISTORICO"
+        nuevo_df["Numero_Actual"] = numeros
+        # El anterior es el número de la fila previa (o 0 para el primero)
+        nuevo_df["Numero_Anterior"] = [0] + numeros[:-1]
+        
+        # Recalculamos las distancias nosotros mismos para que sean perfectas
+        nuevo_df["Distancia_Calculada"] = [
+            calcular_distancia(ant, act) 
+            for ant, act in zip(nuevo_df["Numero_Anterior"], nuevo_df["Numero_Actual"])
+        ]
+        
+        return nuevo_df
+
+    except Exception:
+        return pd.DataFrame() # En caso de error grave, devolvemos vacío
                 # Crear IDs si no existen
                 if "ID" not in df.columns: df["ID"] = range(1, len(df) + 1)
             else:
@@ -366,5 +389,6 @@ else:
             st.dataframe(st.session_state.df_historico.sort_values(by="ID", ascending=False).head(50), use_container_width=True)
         else:
             st.info("Juega bolas para ver estadísticas.")
+
 
 
