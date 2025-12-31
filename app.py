@@ -12,6 +12,7 @@ st.set_page_config(page_title="Sistema Joker Pro", page_icon="🃏", layout="wid
 
 # --- CONSTANTES Y RUTA ---
 NOMBRE_ARCHIVO = "registro_ruleta_app.xlsx"
+# Cilindro Europeo Estándar
 CILINDRO = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23,
             10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 
@@ -24,6 +25,7 @@ def get_num(i):
     return CILINDRO[i % 37]
 
 def calcular_distancia(ant, act):
+    """Calcula el camino más corto en el cilindro."""
     idx_ant, idx_act = get_indice(ant), get_indice(act)
     distancia = idx_act - idx_ant
     if distancia > 18: distancia -= 37
@@ -42,13 +44,13 @@ def cargar_y_reparar_excel(file_buffer):
         try:
             df = pd.read_excel(file_buffer, engine='openpyxl')
         except:
-            # INTENTO 2: Si falla, leer como CSV (tu archivo real es un CSV)
+            # INTENTO 2: Si falla, leer como CSV
             file_buffer.seek(0)
             df = pd.read_csv(file_buffer, sep=None, engine='python')
 
         if df.empty: return inicializar_dataframe()
         
-        # Limpieza básica
+        # Limpieza básica de columnas
         df.columns = [str(c).strip() for c in df.columns]
         
         # Buscar columna de números
@@ -74,6 +76,7 @@ def cargar_y_reparar_excel(file_buffer):
 
     except Exception:
         return inicializar_dataframe()
+
 def guardar_tirada(ant, act):
     # Usar el estado de sesión como fuente de verdad
     df = st.session_state.df_historico
@@ -90,11 +93,11 @@ def guardar_tirada(ant, act):
     # Concatenar y actualizar estado
     st.session_state.df_historico = pd.concat([df, nueva_fila], ignore_index=True)
     
-    # Guardar en disco
+    # Intentar guardar en disco (Solo funciona en local)
     try:
         st.session_state.df_historico.to_excel(NOMBRE_ARCHIVO, index=False)
-    except Exception as e:
-        st.warning(f"No se pudo guardar en disco (pero sí en memoria): {e}")
+    except Exception:
+        pass # Ignoramos errores de escritura silenciosamente
 
 def obtener_top_movimientos(distancias_series, peso_reciente):
     """Analiza las distancias usando el DataFrame completo."""
@@ -102,7 +105,7 @@ def obtener_top_movimientos(distancias_series, peso_reciente):
     
     # Convertir a lista limpia
     distancias = distancias_series.dropna().astype(int).tolist()
-    # Filtramos la primera (que suele ser 0 o NaN al inicio de sesión) si es ruido
+    # Filtramos la primera (que suele ser 0 o NaN al inicio de sesión)
     if len(distancias) > 0 and distancias[0] == 0: distancias.pop(0) 
     
     if not distancias: return []
@@ -111,13 +114,16 @@ def obtener_top_movimientos(distancias_series, peso_reciente):
     conteo = Counter()
     
     # Pesado temporal
-    if len(distancias) <= ventana:
-        conteo.update(distancias)
-    else:
-        conteo.update(distancias[:-ventana])
-        # Los últimos tienen más peso si peso_reciente > 1
-        for d in distancias[-ventana:]:
-            conteo[d] += peso_reciente
+    datos_a_analizar = distancias
+    if len(distancias) > ventana:
+        datos_a_analizar = distancias[-ventana:] # Solo los últimos X
+    
+    for i, d in enumerate(datos_a_analizar):
+        peso = 1
+        # Si estamos en los últimos 5, aplicamos el peso extra
+        if i >= len(datos_a_analizar) - 5: 
+            peso = peso_reciente
+        conteo[d] += peso
 
     lista = conteo.most_common()
     if not lista: return []
@@ -126,7 +132,7 @@ def obtener_top_movimientos(distancias_series, peso_reciente):
     m1 = lista[0][0]
     tops = [(m1, lista[0][1])]
     
-    # Buscar el segundo mejor que tenga una diferencia mínima de 3 posiciones en el cilindro
+    # Buscar el segundo mejor que tenga una diferencia mínima de 3 posiciones
     m2 = next(((m, f) for m, f in lista[1:] if abs(m - m1) >= 3), None)
     if m2: tops.append(m2)
     
@@ -137,7 +143,10 @@ if 'inicializado' not in st.session_state:
     st.session_state.df_historico = inicializar_dataframe()
     # Intentar cargar si existe archivo local
     if os.path.exists(NOMBRE_ARCHIVO):
-        st.session_state.df_historico = cargar_y_reparar_excel(NOMBRE_ARCHIVO)
+        try:
+            st.session_state.df_historico = cargar_y_reparar_excel(NOMBRE_ARCHIVO)
+        except:
+            pass
     
     st.session_state.bank = 0.0
     st.session_state.bank_inicial = 0.0
@@ -155,7 +164,7 @@ st.title("🃏 SISTEMA JOKER: ANÁLISIS DE DESPLAZAMIENTO")
 # PESTAÑAS PRINCIPALES
 tab_juego, tab_stats, tab_config = st.tabs(["🎲 Sala de Juego", "📊 Estadísticas Avanzadas", "⚙️ Configuración"])
 
-# --- TAB CONFIGURACIÓN (SIDEBAR MOVIDO AQUÍ O LATERAL) ---
+# --- SIDEBAR (CONFIGURACIÓN) ---
 with st.sidebar:
     st.header("Control de Banca")
     input_bank = st.number_input("Capital Inicial (€)", value=200.0, step=10.0, min_value=1.0)
@@ -163,23 +172,32 @@ with st.sidebar:
     st.divider()
     st.write("📂 **Gestión de Archivos**")
     
-    uploaded_file = st.file_uploader("Cargar Excel Histórico", type=["xlsx"])
+    uploaded_file = st.file_uploader("Cargar Excel Histórico", type=["xlsx", "csv"]) # Añadido soporte CSV visual
     if uploaded_file:
         try:
             df_subido = cargar_y_reparar_excel(uploaded_file)
-            st.session_state.df_historico = df_subido
-            df_subido.to_excel(NOMBRE_ARCHIVO, index=False)
-            st.success(f"✅ Historial importado: {len(df_subido)} registros")
-            st.rerun()
+            if not df_subido.empty:
+                st.session_state.df_historico = df_subido
+                # Guardar copia local si es posible
+                try:
+                    df_subido.to_excel(NOMBRE_ARCHIVO, index=False)
+                except:
+                    pass
+                st.success(f"✅ Historial importado: {len(df_subido)} registros")
+                st.rerun()
         except Exception as e:
             st.error(f"Error: {e}")
 
     if st.button("🗑️ RESETEAR TODO"):
-        if os.path.exists(NOMBRE_ARCHIVO): os.remove(NOMBRE_ARCHIVO)
+        if os.path.exists(NOMBRE_ARCHIVO):
+            try: os.remove(NOMBRE_ARCHIVO)
+            except: pass
         st.session_state.clear()
         st.rerun()
-st.divider()
-    # Botón Vital para guardar sesión en la nube
+
+    st.divider()
+    
+    # --- BOTÓN DE GUARDADO (Corregido y Unificado) ---
     if not st.session_state.df_historico.empty:
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -191,13 +209,6 @@ st.divider()
             file_name=f"joker_registro_{datetime.now().strftime('%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-        
-    # Botón de descarga siempre disponible
-    if not st.session_state.df_historico.empty:
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            st.session_state.df_historico.to_excel(writer, index=False)
-        st.download_button("📥 Descargar Excel", buffer.getvalue(), "joker_data.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # --- LÓGICA DE INICIO ---
 if not st.session_state.jugando:
@@ -213,51 +224,56 @@ if not st.session_state.jugando:
 elif not st.session_state.calibrado:
     with tab_juego:
         st.warning("⚠️ El sistema necesita sincronizarse con la ruleta.")
-        st.write("Introduce los últimos números (separados por espacio):")
+        st.write("Introduce los últimos números (separados por espacio) para calibrar:")
         txt_calib = st.text_input("Ej: 32 15 19 4", key="input_calib")
         
         if st.button("Sincronizar", use_container_width=True):
+            # Limpieza de input más robusta
             lista = [int(x) for x in txt_calib.replace(',', ' ').split() if x.isdigit()]
+            
             if lista:
-                # Si hay más de 1 número, guardamos el historial para tener datos base
+                # Guardamos historial de calibración
                 if len(lista) > 1:
-                    # Limpiamos df actual para empezar sesión limpia o añadimos?
-                    # Mejor añadimos para tener contexto
                     for i in range(1, len(lista)):
                         guardar_tirada(lista[i-1], lista[i])
                 
                 st.session_state.u_num = lista[-1]
                 st.session_state.calibrado = True
                 st.rerun()
-
 else:
-    # --- BUCLE PRINCIPAL DE JUEGO ---
-    
-    # 1. Cálculos de Economía
-    # Validación de ficha segura
-    base_ficha = st.session_state.bank_inicial / 10 / 12 # Estrategia original
-    ficha = math.floor(base_ficha * 100) / 100
-    if ficha < 0.10: ficha = 0.10 # Mínimo de mesa común
-    
-    # Estado de la sesión
-    perdida_actual = st.session_state.bank_inicial - st.session_state.bank
-    porcentaje_perdida = (perdida_actual / st.session_state.bank_inicial) * 100 if st.session_state.bank_inicial > 0 else 0
-    spins_sesion = len(st.session_state.historial_bank) - 1
+            
+  # --- BUCLE PRINCIPAL DE JUEGO ---
+    with tab_juego:
+        # 1. Cálculos de Economía
+        # Validación de ficha segura (Bank / 120 = muy conservador, perfecto para aguantar rachas)
+        base_ficha = st.session_state.bank_inicial / 10 / 12 
+        ficha = math.floor(base_ficha * 100) / 100
+        if ficha < 0.10: ficha = 0.10 # Mínimo de mesa común
+        
+        # Estado de la sesión
+        perdida_actual = st.session_state.bank_inicial - st.session_state.bank
+        porcentaje_perdida = (perdida_actual / st.session_state.bank_inicial) * 100 if st.session_state.bank_inicial > 0 else 0
+        spins_sesion = len(st.session_state.historial_bank) - 1
 
-    # Lógica de Modo Rescate (Hysteresis)
-    MIN_SPINS = 15
-    RIESGO_TRIGGER = 35.0 # %
-    
-    if st.session_state.modo_rescate_activo:
-        peso = 5 # Modo agresivo en detección de tendencias
-        if st.session_state.bank >= st.session_state.bank_inicial:
-            st.session_state.modo_rescate_activo = False
-    else:
-        peso = 1
-        if spins_sesion > MIN_SPINS and porcentaje_perdida >= RIESGO_TRIGGER:
-            st.session_state.modo_rescate_activo = True
-
-    # 2. Interfaz de Juego (Tab Juego)
+        # Lógica de Modo Rescate (Trigger al perder 35% tras 15 tiradas)
+        MIN_SPINS = 15
+        RIESGO_TRIGGER = 35.0 # %
+        
+        if st.session_state.modo_rescate_activo:
+            peso = 5 # Modo agresivo: Mira más el corto plazo
+            st.error("🚨 MODO RESCATE ACTIVO: Buscando patrones calientes agresivos")
+            # Si recuperamos la banca inicial, salimos del modo rescate
+            if st.session_state.bank >= st.session_state.bank_inicial:
+                st.session_state.modo_rescate_activo = False
+                st.success("✅ BANCA RECUPERADA: Volviendo a modo normal")
+        else:
+            peso = 1 # Modo normal: Análisis equilibrado
+            # Entrar en pánico si llevamos tiempo jugando y perdemos mucho
+            if spins_sesion > MIN_SPINS and porcentaje_perdida >= RIESGO_TRIGGER:
+                st.session_state.modo_rescate_activo = True
+                st.toast("⚠️ ALERTA: Activando Protocolo de Rescate", icon="🚨")
+                        
+  # 2. Interfaz de Juego (Tab Juego)
     with tab_juego:
         # Métricas superiores
         col1, col2, col3 = st.columns(3)
@@ -271,7 +287,8 @@ else:
         with st.form("form_jugada", clear_on_submit=True):
             c_in, c_btn = st.columns([3, 1])
             with c_in:
-                nuevo_num = st.number_input(f"Último número ({st.session_state.u_num}) -> Nuevo:", min_value=0, max_value=36, step=1)
+                label_input = f"Último número ({st.session_state.u_num})" if st.session_state.u_num is not None else "Introduce primer número"
+                nuevo_num = st.number_input(f"{label_input} -> Nuevo:", min_value=0, max_value=36, step=1)
             with c_btn:
                 st.write("") # Espaciador
                 jugada_hecha = st.form_submit_button("GIRA LA BOLA 🎱", use_container_width=True)
@@ -282,6 +299,7 @@ else:
             coste_apuesta = len(nums_apostados) * ficha
             
             ganancia = 0
+            # Solo descontamos dinero si había apuesta activa
             if nums_apostados:
                 st.session_state.bank -= coste_apuesta
                 if nuevo_num in nums_apostados:
@@ -292,11 +310,13 @@ else:
                     st.toast("Fallo", icon="❌")
             
             # B. Guardar Datos
-            guardar_tirada(st.session_state.u_num, nuevo_num)
-            st.session_state.historial_bank.append(st.session_state.bank)
+            if st.session_state.u_num is not None:
+                guardar_tirada(st.session_state.u_num, nuevo_num)
+                st.session_state.historial_bank.append(st.session_state.bank)
+            
             st.session_state.u_num = nuevo_num
             
-            # C. Limpiar predicción anterior para forzar recálculo visual
+            # C. Recargar para actualizar predicción
             st.rerun()
 
         # 3. Lógica de Predicción (Se ejecuta siempre tras el rerun)
@@ -304,7 +324,6 @@ else:
             # Usar el DataFrame limpio para buscar tendencias
             tops = obtener_top_movimientos(st.session_state.df_historico["Distancia_Calculada"], peso)
             
-            # --- AQUÍ INTEGRAMOS TU LÓGICA DE VISUALIZACIÓN ---
             if tops:
                 st.write("---")
                 st.markdown("### 🎯 ESTRATEGIA AMBOS LADOS")
@@ -316,7 +335,7 @@ else:
                 
                 with col_info:
                     for i, (mov, freq) in enumerate(tops):
-                        # Aquí está la magia: Tomamos el movimiento (ej: 4) y sus vecinos (3, 4, 5)
+                        # Tomamos el movimiento (ej: 4) y sus vecinos (3, 4, 5)
                         vecinos_mov = [mov-1, mov, mov+1]
                         
                         st.markdown(f"**Tendencia {i+1}:** Desplazamiento de {mov} espacios")
@@ -335,43 +354,22 @@ else:
                         
                         st.text(f"Números cubiertos: {sorted(list(set(numeros_visuales)))}")
 
-                # Limpiamos duplicados para la apuesta final
+                # Limpiamos duplicados y guardamos
                 apuesta_nums_final = sorted(list(set(apuesta_nums_final)))
                 st.session_state.apuesta_actual = apuesta_nums_final
 
+                # Panel Resumen de Apuesta
                 with col_resumen:
-                    st.error(f"APOSTAR")
-                    st.metric("Total Números", len(apuesta_nums_final))
-                    st.metric("Coste Fichas", f"{(len(apuesta_nums_final)*ficha):.2f}€")
-                # Calcular números finales únicos para la apuesta interna
-                apuesta_nums_final = []
-                idx_base = get_indice(st.session_state.u_num)
-                
-                # Desplazamientos únicos positivos (para la lógica interna del sistema)
-                desp_unicos = sorted(list(set([d for d in desplazamientos_a_apostar])))
-                
-                for d in desp_unicos:
-                    if d == 0: continue # Ignorar desplazamiento 0 puro en apuesta salvo que sea estrategia
-                    apuesta_nums_final.append(get_num(idx_base + d))
-                    apuesta_nums_final.append(get_num(idx_base - d))
-                
-                # Guardar en estado para la siguiente validación
-                apuesta_nums_final = sorted(list(set(apuesta_nums_final)))
-                st.session_state.apuesta_actual = apuesta_nums_final
-
-                with col_resumen:
-                    st.success(f"**APUESTA ACTIVA**")
-                    st.write(f"Números: **{len(apuesta_nums_final)}**")
-                    st.write(f"Coste: **{(len(apuesta_nums_final)*ficha):.2f}€**")
-                    st.info(f"""
-                    **Instrucción Rápida:**
-                    Último: **{st.session_state.u_num}**
-                    Aplica desplazamientos:
-                    {desp_unicos}
-                    """)
+                    if apuesta_nums_final:
+                        st.error("⚠️ EJECUTAR APUESTA")
+                        st.metric("Total Números", len(apuesta_nums_final))
+                        st.metric("Coste Fichas", f"{(len(apuesta_nums_final)*ficha):.2f}€")
+                        st.caption(f"Apostar a: {str(apuesta_nums_final)}")
+                    else:
+                        st.info("Sin números para apostar.")
 
             else:
-                st.warning("Recopilando datos para detectar tendencias...")
+                st.info("Recopilando datos para detectar tendencias claras...")
                 st.session_state.apuesta_actual = []
 
     # --- PESTAÑA ESTADÍSTICAS ---
@@ -389,16 +387,17 @@ else:
             with c2:
                 st.subheader("📏 Frecuencia de Distancias")
                 if "Distancia_Calculada" in st.session_state.df_historico.columns:
-                    # Filtramos ceros o nulos visualmente
+                    # Filtramos ceros
                     data_dist = st.session_state.df_historico["Distancia_Calculada"]
                     data_dist = data_dist[data_dist != 0] 
                     conteo_dist = data_dist.value_counts().sort_index()
                     st.bar_chart(conteo_dist)
             
-            st.subheader("📋 Raw Data")
+            st.subheader("📋 Historial Detallado")
             st.dataframe(st.session_state.df_historico.sort_values(by="ID", ascending=False).head(50), use_container_width=True)
         else:
-            st.info("Juega bolas para ver estadísticas.")
+            st.info("Juega bolas o carga un Excel para ver estadísticas.")
+
 
 
 
