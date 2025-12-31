@@ -172,18 +172,30 @@ with st.sidebar:
     st.divider()
     st.write("📂 **Gestión de Archivos**")
     
-    uploaded_file = st.file_uploader("Cargar Excel Histórico", type=["xlsx", "csv"]) # Añadido soporte CSV visual
+ uploaded_file = st.file_uploader("Cargar Excel Histórico", type=["xlsx", "csv"])
     if uploaded_file:
         try:
             df_subido = cargar_y_reparar_excel(uploaded_file)
             if not df_subido.empty:
+                # 1. Cargar Histórico
                 st.session_state.df_historico = df_subido
-                # Guardar copia local si es posible
-                try:
-                    df_subido.to_excel(NOMBRE_ARCHIVO, index=False)
-                except:
-                    pass
-                st.success(f"✅ Historial importado: {len(df_subido)} registros")
+                
+                # 2. Sincronizar Último Número
+                ultimo_numero = df_subido.iloc[-1]["Numero_Actual"]
+                st.session_state.u_num = int(ultimo_numero)
+                
+                # 3. ACTIVACIÓN AUTOMÁTICA (El truco del Joker)
+                st.session_state.bank = input_bank
+                st.session_state.bank_inicial = input_bank
+                st.session_state.historial_bank = [input_bank]
+                st.session_state.calibrado = True
+                st.session_state.jugando = True  # <--- ESTO ES LO QUE TE FALTABA
+                
+                # 4. Guardar Backup
+                try: df_subido.to_excel(NOMBRE_ARCHIVO, index=False)
+                except: pass
+                
+                st.success(f"✅ ¡SISTEMA INICIADO! Último: {ultimo_numero}")
                 st.rerun()
         except Exception as e:
             st.error(f"Error: {e}")
@@ -397,6 +409,7 @@ else:
             st.dataframe(st.session_state.df_historico.sort_values(by="ID", ascending=False).head(50), use_container_width=True)
         else:
             st.info("Juega bolas o carga un Excel para ver estadísticas.")
+
 
 
 
