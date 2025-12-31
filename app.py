@@ -36,56 +36,44 @@ def inicializar_dataframe():
     return pd.DataFrame(columns=["ID", "Fecha_Hora", "Numero_Actual", "Numero_Anterior", "Distancia_Calculada"])
 
 # EXCEL CARGA
-def cargar_y_reparar_excel(ruta_o_archivo):
+def cargar_y_reparar_excel(file_buffer):
     try:
-        # Forzamos motor openpyxl para leer archivos modernos
-        df = pd.read_excel(ruta_o_archivo, engine='openpyxl')
+        # INTENTO 1: Leer como Excel
+        try:
+            df = pd.read_excel(file_buffer, engine='openpyxl')
+        except:
+            # INTENTO 2: Si falla, leer como CSV (tu archivo real es un CSV)
+            file_buffer.seek(0)
+            df = pd.read_csv(file_buffer, sep=None, engine='python')
+
+        if df.empty: return inicializar_dataframe()
         
-        # Si está vacío o no tiene datos, devolvemos estructura vacía
-        if df.empty: 
-            return pd.DataFrame(columns=["ID", "Fecha_Hora", "Numero_Actual", "Numero_Anterior", "Distancia_Calculada"])
-        
-        # Limpieza de nombres de columnas (quita espacios extra)
+        # Limpieza básica
         df.columns = [str(c).strip() for c in df.columns]
         
-        # Buscamos la columna de los números (acepta 'Numero_Actual', 'Numero', 'Rotación', etc.)
-        col_num = next((c for c in df.columns if "actual" in c.lower() or "numero" in c.lower()), None)
-        
-        if not col_num:
-            return pd.DataFrame() # Falló la búsqueda de columna
+        # Buscar columna de números
+        col_num = next((c for c in df.columns if "actual" in c.lower() or "numero" in c.lower() or c.lower() == "n"), None)
+        if not col_num: return pd.DataFrame()
 
-        # RECONSTRUCCIÓN INTELIGENTE (JOKER):
-        # Ignoramos la columna 'Numero_Anterior' del Excel porque venía con ceros.
-        # Creamos la secuencia real usando solo los números que salieron.
-        numeros = df[col_num].astype(int).tolist()
+        # Reconstrucción Joker
+        if "ID" in df.columns: df = df.sort_values(by="ID", ascending=True)
+        numeros = df[col_num].fillna(0).astype(int).tolist()
         
         nuevo_df = pd.DataFrame()
         nuevo_df["ID"] = range(1, len(numeros) + 1)
         nuevo_df["Fecha_Hora"] = df["Fecha_Hora"] if "Fecha_Hora" in df.columns else "HISTORICO"
         nuevo_df["Numero_Actual"] = numeros
-        # El anterior es el número de la fila previa (o 0 para el primero)
         nuevo_df["Numero_Anterior"] = [0] + numeros[:-1]
         
-        # Recalculamos las distancias nosotros mismos para que sean perfectas
+        # Recalcular distancias
         nuevo_df["Distancia_Calculada"] = [
             calcular_distancia(ant, act) 
             for ant, act in zip(nuevo_df["Numero_Anterior"], nuevo_df["Numero_Actual"])
         ]
-        
         return nuevo_df
 
     except Exception:
-        return pd.DataFrame() # En caso de error grave, devolvemos vacío
-                # Crear IDs si no existen
-                if "ID" not in df.columns: df["ID"] = range(1, len(df) + 1)
-            else:
-                return inicializar_dataframe()
-        
-        return df
-    except Exception as e:
-        st.error(f"Error al cargar archivo: {e}")
         return inicializar_dataframe()
-
 def guardar_tirada(ant, act):
     # Usar el estado de sesión como fuente de verdad
     df = st.session_state.df_historico
@@ -190,6 +178,19 @@ with st.sidebar:
         if os.path.exists(NOMBRE_ARCHIVO): os.remove(NOMBRE_ARCHIVO)
         st.session_state.clear()
         st.rerun()
+st.divider()
+    # Botón Vital para guardar sesión en la nube
+    if not st.session_state.df_historico.empty:
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            st.session_state.df_historico.to_excel(writer, index=False)
+            
+        st.download_button(
+            label="💾 GUARDAR SESIÓN (Descargar Excel)",
+            data=buffer.getvalue(),
+            file_name=f"joker_registro_{datetime.now().strftime('%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
         
     # Botón de descarga siempre disponible
     if not st.session_state.df_historico.empty:
@@ -306,33 +307,42 @@ else:
             # --- AQUÍ INTEGRAMOS TU LÓGICA DE VISUALIZACIÓN ---
             if tops:
                 st.write("---")
-                st.markdown("### 🎯 DESPLAZAMIENTOS A APOSTAR")
+                st.markdown("### 🎯 ESTRATEGIA AMBOS LADOS")
                 
-                desplazamientos_a_apostar = []
+                apuesta_nums_final = []
+                idx_base = get_indice(st.session_state.u_num)
                 
                 col_info, col_resumen = st.columns([2, 1])
                 
                 with col_info:
                     for i, (mov, freq) in enumerate(tops):
-                        vecinos = [mov-1, mov, mov+1]
-                        desplazamientos_a_apostar.extend(vecinos)
-                        tag = "🔥 (Tendencia Fuerte)" if i == 0 and peso > 1 else ""
+                        # Aquí está la magia: Tomamos el movimiento (ej: 4) y sus vecinos (3, 4, 5)
+                        vecinos_mov = [mov-1, mov, mov+1]
                         
-                        st.markdown(f"**Tendencia {i+1}** (Salto de {mov}) {tag}")
-                        st.caption(f"Apostar desplazamientos: {vecinos[0]}, {vecinos[1]}, {vecinos[2]}")
+                        st.markdown(f"**Tendencia {i+1}:** Desplazamiento de {mov} espacios")
+                        st.caption(f"Cubriendo rango: {vecinos_mov} hacia IZQUIERDA y DERECHA")
                         
-                        # Mostrar números para referencia
-                        idx = get_indice(st.session_state.u_num)
-                        numeros_tendencia = []
-                        for v in vecinos:
-                            if v != 0: # Evitamos el propio número si el desplazamiento es 0
-                                # Normalizamos v para visualizar
-                                n_pos = get_num(idx + v)
-                                n_neg = get_num(idx - v)
-                                numeros_tendencia.extend([n_pos, n_neg])
+                        numeros_visuales = []
+                        for v in vecinos_mov:
+                            if v == 0: continue
+                            # LADO POSITIVO (+v)
+                            n_pos = get_num(idx_base + v)
+                            # LADO NEGATIVO (-v)
+                            n_neg = get_num(idx_base - v)
+                            
+                            numeros_visuales.extend([n_pos, n_neg])
+                            apuesta_nums_final.extend([n_pos, n_neg])
                         
-                        st.text(f"Números cubiertos: {sorted(list(set(numeros_tendencia)))}")
-                
+                        st.text(f"Números cubiertos: {sorted(list(set(numeros_visuales)))}")
+
+                # Limpiamos duplicados para la apuesta final
+                apuesta_nums_final = sorted(list(set(apuesta_nums_final)))
+                st.session_state.apuesta_actual = apuesta_nums_final
+
+                with col_resumen:
+                    st.error(f"APOSTAR")
+                    st.metric("Total Números", len(apuesta_nums_final))
+                    st.metric("Coste Fichas", f"{(len(apuesta_nums_final)*ficha):.2f}€")
                 # Calcular números finales únicos para la apuesta interna
                 apuesta_nums_final = []
                 idx_base = get_indice(st.session_state.u_num)
@@ -389,6 +399,7 @@ else:
             st.dataframe(st.session_state.df_historico.sort_values(by="ID", ascending=False).head(50), use_container_width=True)
         else:
             st.info("Juega bolas para ver estadísticas.")
+
 
 
 
