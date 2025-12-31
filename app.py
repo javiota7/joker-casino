@@ -120,8 +120,8 @@ def obtener_top_movimientos(distancias_series, peso_reciente):
     
     for i, d in enumerate(datos_a_analizar):
         peso = 1
-        # Si estamos en los últimos 5, aplicamos el peso extra
-        if i >= len(datos_a_analizar) - 5: 
+        # Si estamos en los últimos 10, aplicamos el peso extra
+        if i >= len(datos_a_analizar) - 10: 
             peso = peso_reciente
         conteo[d] += peso
 
@@ -409,6 +409,7 @@ else:
             st.dataframe(st.session_state.df_historico.sort_values(by="ID", ascending=False).head(50), use_container_width=True)
         else:
             st.info("Juega bolas o carga un Excel para ver estadísticas.")
+
 
 
 
