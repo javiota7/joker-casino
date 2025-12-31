@@ -189,7 +189,7 @@ if not st.session_state.jugando:
 elif not st.session_state.calibrado:
     with tab_juego:
         st.warning("⚠️ El sistema necesita sincronizarse con la ruleta.")
-        st.write("Introduce los últimos números salidos (separados por espacio):")
+        st.write("Introduce los últimos números (separados por espacio):")
         txt_calib = st.text_input("Ej: 32 15 19 4", key="input_calib")
         
         if st.button("Sincronizar", use_container_width=True):
@@ -366,4 +366,5 @@ else:
             st.dataframe(st.session_state.df_historico.sort_values(by="ID", ascending=False).head(50), use_container_width=True)
         else:
             st.info("Juega bolas para ver estadísticas.")
+
 
